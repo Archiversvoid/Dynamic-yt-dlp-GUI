@@ -248,7 +248,7 @@ def accent_text():
 # ----------------------------------------------------------------- icons
 # Icons that are single-color glyphs. Colored art (check, "trash red") is left alone.
 _MONO = {"home", "scissors", "downloads", "settings", "collapse", "expand",
-         "arrow-right", "pause", "play", "trash", "retry"}
+         "arrow-right", "pause", "play", "trash", "retry", "info", "github", "reddit", "discord"}
 _icon_base = {}     # name -> (QImage, avg_luminance, avg_saturation)
 _icon_cache = {}    # (name, mode) -> QPixmap
 
@@ -344,3 +344,21 @@ def icon(name, icons_dir, cache_dir):
     from PySide6.QtGui import QIcon
     pm = icon_pixmap(name, icons_dir, cache_dir)
     return QIcon(pm) if not pm.isNull() else QIcon()
+
+
+def image_pixmap(name, icons_dir, cache_dir, px):
+    """A decorative image (e.g. promo.png) exactly as drawn - never recolored -
+    decoded at <= px and cached on disk like the icons."""
+    from PySide6.QtGui import QPixmap
+    img = _small_image(name, icons_dir, cache_dir, px)
+    return QPixmap.fromImage(img) if img is not None else QPixmap()
+
+
+def tint_pixmap(pm, color):
+    """A copy of a pixmap with every visible pixel recoloured to `color` (its transparency is kept)."""
+    from PySide6.QtGui import QPixmap
+    if pm is None or pm.isNull():
+        return pm
+    out = QPixmap.fromImage(_tint(pm.toImage(), color))
+    out.setDevicePixelRatio(pm.devicePixelRatio())
+    return out

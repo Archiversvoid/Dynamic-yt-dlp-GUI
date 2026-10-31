@@ -19,14 +19,34 @@ Notes:
     anything this stub can save.
 """
 import os
+from pathlib import Path
 import sys
 import time
 import traceback
+
+import theme
 
 _T0 = time.perf_counter()
 PROFILE = "--profile" in sys.argv or os.environ.get("DYNAMIC_PROFILE") == "1"
 sys.argv = [a for a in sys.argv if a != "--profile"]
 _marks = []
+_qt_msgs = []
+
+
+def _install_qt_capture():
+    """Profile mode only: record Qt's own log lines in the report. Qt prints
+    "Populating font family aliases took N ms. Replace uses of missing font
+    family 'X'..." when something asks for a font that isn't installed - that
+    message names the exact culprit."""
+    os.environ["QT_LOGGING_RULES"] = "qt.qpa.fonts=true"
+    from PySide6.QtCore import qInstallMessageHandler
+
+    def handler(mode, ctx, msg):
+        try:
+            _qt_msgs.append("[%7.3f] %s" % (time.perf_counter() - _T0, msg))
+        except Exception:
+            pass
+    qInstallMessageHandler(handler)
 
 
 def _mark(label):
@@ -47,12 +67,32 @@ def _write_profile_report(prof):
     for label, t in _marks:
         out.write("  %7.3f   (+%6.3f)  %s\n" % (t, t - prev, label))
         prev = t
+    out.write("\nQT MESSAGES (first 40)\n")
+    for line in _qt_msgs[:40]:
+        out.write("  " + line + "\n")
+    if not _qt_msgs:
+        out.write("  (none)\n")
     if prof is not None:
         out.write("\nWINDOW CONSTRUCTION - top functions by cumulative time (cProfile)\n")
         pstats.Stats(prof, stream=out).sort_stats("cumulative").print_stats(25)
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "startup_profile.txt")
     with open(path, "w", encoding="utf-8") as f:
         f.write(out.getvalue())
+
+
+def _init_theme():
+    """Pick the saved theme before anything is drawn, so the splash matches the app."""
+    try:
+        import json
+        if getattr(sys, 'frozen', False):
+            base = Path(sys.executable).resolve().parent
+        else:
+            base = Path(__file__).resolve().parent
+        path = base / "settings.json"
+        saved = json.load(open(path, encoding="utf-8")).get("theme", "Default")
+    except Exception:
+        saved = "Default"
+    theme.set_mode(theme.resolve(saved))
 
 
 def _set_app_id():
@@ -74,28 +114,30 @@ def _make_splash(app):
     dpr = max(1.0, app.devicePixelRatio())
     pm = QPixmap(int(w * dpr), int(h * dpr))
     pm.setDevicePixelRatio(dpr)
-    pm.fill(QColor("#121212"))
+    pm.fill(theme.qc("#121212", "bg"))
 
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-    p.setPen(QPen(QColor("#2A2A2A"), 1))
+    p.setPen(QPen(theme.qc("#2A2A2A", "border"), 1))
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 14, 14)
 
     title = QFont("Segoe UI", 30)
     title.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 6)
     p.setFont(title)
-    p.setPen(QColor("#FFFFFF"))
+    p.setPen(theme.qc("#FFFFFF", "text"))
     p.drawText(QRectF(0, 62, w, 60), Qt.AlignmentFlag.AlignCenter, "DYNAMIC")
 
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#00BFA5"))
+    p.setBrush(theme.qc("#00BFA5", "bg"))
     p.drawRoundedRect(QRectF(w / 2 - 24, 128, 48, 3), 1.5, 1.5)
     p.end()
+    _mark("splash image painted (first text drawn)")
 
     splash = QSplashScreen(pm, Qt.WindowType.WindowStaysOnTopHint)
+    _mark("QSplashScreen object created")
     msg_font = QFont("Segoe UI", 10)
     splash.setFont(msg_font)
     return splash
@@ -104,21 +146,25 @@ def _make_splash(app):
 def _status(splash, app, text):
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor
-    splash.showMessage(text, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, QColor("#8A8A8A"))
+    splash.showMessage(text, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, theme.qc("#8A8A8A", "text"))
     app.processEvents()
 
 
 def main():
     _set_app_id()
+    _init_theme()
 
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    if PROFILE:
+        _install_qt_capture()
     app = QApplication(sys.argv)
     _mark("QApplication created (PySide6 imported)")
     splash = _make_splash(app)
     splash.show()
+    _mark("splash.show() returned")
     _status(splash, app, "Loading...")
-    _mark("splash on screen")
+    _mark("first processEvents done (splash visible)")
     prof = None
 
     try:

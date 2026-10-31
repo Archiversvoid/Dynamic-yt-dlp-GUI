@@ -1,0 +1,1 @@
+# Major application views and tabs

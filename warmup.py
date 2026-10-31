@@ -112,7 +112,7 @@ def collect_files(app_dir, deep=False):
                 pass
 
     # 1. The app itself: scripts (dev) or the exe (compiled), fonts, icons.
-    add_glob(app_dir, ["launcher.py", "main.py", "TrimLoad.py", "universal_scraper.py", "Fetcher.py"])
+    add_glob(app_dir, ["launcher.py", "main.py", "theme.py", "src/**/*.py"])
     if not (app_dir / "main.py").exists():
         add_glob(app_dir, ["*.exe"])
     add_glob(app_dir, ["assets/*", "icons/*"])
