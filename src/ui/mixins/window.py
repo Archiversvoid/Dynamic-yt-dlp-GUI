@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import theme
 from urllib.parse import urlparse
 from PySide6.QtCore import QEasingCurve, QSize, Qt, QTimer, QUrl, QVariantAnimation
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 from theme import qc as _qc, ss as _ss
 from src.core.downloader import _site_name
 from src.core.models import DownloadItem
+from src.core.prewarm import FilePrewarm, collect_multimedia_files
 from src.paths import cache_dir, default_download_dir, favicon_dir, ICON_PATH, repo_root
 from src.ui.components.navigation import FilterTab, SidebarNavButton
 from src.ui.styles import (
@@ -153,7 +155,8 @@ class WindowMixin:
                             out_dir=d["out_dir"], is_audio=d["is_audio"], selected_fid=d["selected_fid"], 
                             duration_str=d["duration_str"], site_name=_site_name(d["url"]), 
                             thumb_url=d.get("thumb_url"), fav_path=fav_p, 
-                            start_time=d.get("start_time"), end_time=d.get("end_time")
+                            start_time=d.get("start_time"), end_time=d.get("end_time"),
+                            audio_bitrate=d.get("audio_bitrate")
                         )
                         it.status, it.percent, it.total_size, it.downloaded = d["status"], d.get("percent", 0.0), d.get("total_size", ""), d.get("downloaded", "")
                         it.error_msg = d.get("error_msg", "")
@@ -175,6 +178,7 @@ class WindowMixin:
                 "selected_fid": item.selected_fid, "duration_str": item.duration_str, "status": "paused" if item.status == "active" else item.status,
                 "percent": item.percent, "total_size": item.total_size, "downloaded": item.downloaded, "thumb_path": item.thumb_path,
                 "thumb_url": item.thumb_url, "fav_path": getattr(item, 'fav_path', None), "start_time": item.start_time, "end_time": item.end_time,
+                "audio_bitrate": getattr(item, "audio_bitrate", None),
                 "error_msg": item.error_msg,
                 "final_path": item.final_path
             })
@@ -252,7 +256,11 @@ class WindowMixin:
         self.trim_layout = QVBoxLayout(self.tab_trim)
         self.trim_layout.setContentsMargins(0, 0, 0, 0)
         self.stack.addWidget(self.tab_trim)
-        self._trim_loaded = False 
+        self._trim_loaded = False
+        self._trim_building = False        # TrimLoad build in progress (waiting for the pre-warm, or constructing)
+        self._constructing_trim = False    # True only during the short, blocking construction itself
+        self._trim_placeholder = None      # the "Loading TrimLoad…" label shown while waiting
+        self._prewarm = None               # background reader that caches the multimedia DLLs
         
         self.tab_dl = QWidget()
         self._build_downloads_tab()
@@ -344,16 +352,21 @@ class WindowMixin:
             QTimer.singleShot(150, lambda: self._apply_theme("Default"))
 
     def _apply_titlebar_theme(self):
-        """Dark/light native title bar to match (Windows 10 1809+ / 11)."""
+        """The native title bar is always the light (white) one, whichever app theme is selected.
+        (It used to follow the theme, which made it black in dark mode.) Applied before the window is
+        first shown, and the frame is repainted at once - Windows otherwise only refreshes the caption
+        colour the next time the window is activated."""
         if sys.platform != "win32":
             return
         try:
-            val = ctypes.c_int(0 if theme.is_light() else 1)
+            val = ctypes.c_int(0)                                   # DWMWA_USE_IMMERSIVE_DARK_MODE = off
             hwnd = int(self.winId())
-            for attr in (20, 19):
+            for attr in (20, 19):                                   # 20 on current Windows 10/11, 19 on older builds
                 if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), ctypes.sizeof(val)) == 0:
                     break
-            ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0027)   # nudge a frame redraw
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)        # NOMOVE | NOSIZE | NOZORDER | NOACTIVATE | FRAMECHANGED
+            user32.RedrawWindow(hwnd, None, None, 0x0501)           # RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW
         except Exception:
             pass
 
@@ -363,6 +376,12 @@ class WindowMixin:
         if not getattr(self, "_sched_started", False):
             self._sched_started = True
             QTimer.singleShot(6000, lambda: self._check_scheduled_updates(startup=True))
+            QTimer.singleShot(1500, self._start_prewarm)
+            try:                                                    # Windows switching its own light/dark mode must not turn the title bar dark again
+                from PySide6.QtGui import QGuiApplication
+                QGuiApplication.styleHints().colorSchemeChanged.connect(lambda *_: QTimer.singleShot(200, self._apply_titlebar_theme))
+            except Exception:
+                pass
             QTimer.singleShot(2500, self._warm_up_ytdlp)
             self._sched_timer = QTimer(self)
             self._sched_timer.setInterval(3600 * 1000)
@@ -370,6 +389,8 @@ class WindowMixin:
             self._sched_timer.start()
 
     def _toggle_sidebar(self):
+        if getattr(self, "_constructing_trim", False):
+            return        # ignore clicks in the middle of the TrimLoad build
         self._sidebar_collapsed = not self._sidebar_collapsed
         collapsed = self._sidebar_collapsed
 
@@ -389,17 +410,14 @@ class WindowMixin:
         self._sidebar_anim.start()
 
     def _show_tab(self, idx):
+        if getattr(self, "_constructing_trim", False):
+            return        # a click that arrived in the middle of the TrimLoad build (see the notes below)
         if self.stack.currentIndex() == idx:
             return
-            
+
         if idx == 1 and not getattr(self, "_trim_loaded", False):
-            from src.ui.trim import TrimLoadTab
-            self.trim_widget = TrimLoadTab(self)
-            if hasattr(self.trim_widget, "request_trim"):
-                self.trim_widget.request_trim.connect(self._handle_trim_request)
-            self.trim_layout.addWidget(self.trim_widget)
-            self._trim_loaded = True
-            
+            self._begin_trim_build(show_placeholder=True)      # asynchronous: the window stays responsive meanwhile
+
         if idx == 3 and not getattr(self, "_settings_built", False):
             self._build_settings_tab()
 
@@ -407,6 +425,112 @@ class WindowMixin:
         for i, btn in enumerate(self.nav_btns):
             btn.set_active(i == idx)
         if idx == 2: self._ensure_dl_list_loaded()
+
+    # ------------------------------------------------------------------
+    # Building the TrimLoad tab.
+    #
+    # It loads the Qt multimedia stack (an FFmpeg backend, ~100 MB of DLLs) and opens the audio
+    # device. Right after a boot nothing is in the OS file cache, so doing that inside the click
+    # froze the window ("Not Responding"). Worse, Windows' audio/COM code pumps messages during
+    # the build, so clicks that arrived meanwhile were handled IN THE MIDDLE of it: a second click
+    # on TrimLoad started a second build inside the first (_trim_loaded was only set afterwards),
+    # and the sidebar button ran its animation against a half-built tab - a total freeze.
+    #
+    # Now: (1) shortly after launch the multimedia files are read into the file cache from a
+    # background thread; (2) a click on TrimLoad shows a "Loading" page at once and WAITS (by timer,
+    # window responsive) for that to finish, then builds - which is quick with warm files;
+    # (3) clicks during the short build itself are ignored; (4) once everything is cached and the
+    # user is idle on Home, the tab is built in advance so the first click is instant.
+    # ------------------------------------------------------------------
+    def _start_prewarm(self, prebuild=True):
+        if getattr(self, "_prewarm", None) is None:
+            self._prewarm = FilePrewarm(collect_multimedia_files())
+            self._prewarm.start()
+        if prebuild:
+            self._prebuild_polls = 0
+            QTimer.singleShot(500, self._poll_prewarm_for_prebuild)
+
+    def _poll_prewarm_for_prebuild(self):
+        pw = self._prewarm
+        if pw.running():
+            self._prebuild_polls += 1
+            if self._prebuild_polls < 240:                      # stop polling after about two minutes
+                QTimer.singleShot(500, self._poll_prewarm_for_prebuild)
+            return
+        if pw.bytes_read > 0:                                   # the files really are cached now
+            QTimer.singleShot(1500, self._maybe_prebuild_trim)
+
+    def _maybe_prebuild_trim(self, tries=0):
+        if getattr(self, "_trim_loaded", False) or getattr(self, "_trim_building", False):
+            return
+        busy = self.stack.currentIndex() != 0 or any(getattr(d, "status", "") == "active" for d in self._dl_items)
+        if busy:                                                # don't build while the user is doing something else
+            if tries < 12:
+                QTimer.singleShot(5000, lambda: self._maybe_prebuild_trim(tries + 1))
+            return
+        self._begin_trim_build(show_placeholder=False)
+
+    def _ensure_trim_placeholder(self):
+        if getattr(self, "_trim_loaded", False):
+            return
+        ph = getattr(self, "_trim_placeholder", None)
+        if ph is None:
+            ph = QLabel("Loading TrimLoad…")
+            ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _ss(ph, f"color: {TEXT_MUTED}; font-size: 16px; background: transparent;")
+            self.trim_layout.addWidget(ph)
+            self._trim_placeholder = ph
+        else:
+            ph.setText("Loading TrimLoad…")
+
+    def _begin_trim_build(self, show_placeholder=True):
+        if show_placeholder:
+            self._ensure_trim_placeholder()
+        if getattr(self, "_trim_building", False):
+            return                                              # already on its way: extra clicks must not start another build
+        self._trim_building = True
+        if getattr(self, "_prewarm", None) is None:
+            self._start_prewarm(prebuild=False)                 # clicked before the idle pre-warm began
+        self._wait_then_build_trim(time.monotonic())
+
+    def _wait_then_build_trim(self, started):
+        pw = getattr(self, "_prewarm", None)
+        if pw is not None and pw.running() and time.monotonic() - started < 40:
+            QTimer.singleShot(80, lambda: self._wait_then_build_trim(started))
+            return
+        QTimer.singleShot(0, self._construct_trim_tab)          # let the "Loading" page paint first
+
+    def _construct_trim_tab(self):
+        self._constructing_trim = True                          # _show_tab and _toggle_sidebar ignore clicks until this ends
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        try:
+            from src.ui.trim import TrimLoadTab
+            tab = TrimLoadTab(self)
+            if hasattr(tab, "request_trim"):
+                tab.request_trim.connect(self._handle_trim_request)
+            ph = getattr(self, "_trim_placeholder", None)
+            if ph is not None:
+                self.trim_layout.removeWidget(ph)
+                ph.deleteLater()
+                self._trim_placeholder = None
+            self.trim_widget = tab
+            self.trim_layout.addWidget(tab)
+            self._trim_loaded = True
+        except Exception as e:
+            ph = getattr(self, "_trim_placeholder", None)       # a readable message instead of a blank page; leaving and re-opening the tab retries
+            if ph is not None:
+                ph.setText("Couldn't load TrimLoad: %s" % str(e)[:160])
+            try:
+                import traceback
+                d = repo_root / "logs"; d.mkdir(parents=True, exist_ok=True)
+                with open(d / "ui_timing.log", "a", encoding="utf-8") as f:
+                    f.write(traceback.format_exc() + "\n")
+            except Exception:
+                pass
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._constructing_trim = False
+            self._trim_building = False
 
     def _handle_trim_request(self, url, start, end):
         self._show_tab(0)

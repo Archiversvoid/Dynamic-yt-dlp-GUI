@@ -10,7 +10,7 @@ from PySide6.QtGui import QCursor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget)
 from theme import ss as _ss
-from src.core.downloader import _fetch_favicon_sync, _get_yt_dlp, _is_audio_only_url, _site_name, fetch_formats, strip_ansi
+from src.core.downloader import _fetch_favicon_sync, _get_yt_dlp, _is_audio_only_url, _site_name, fetch_formats, parse_kbps, strip_ansi
 from src.core.models import DownloadItem
 from src.paths import default_download_dir, repo_root, thumb_dir
 from src.ui.components.combo import AnimatedComboBox
@@ -448,7 +448,8 @@ class HomeMixin:
                 out_dir=self.settings.get("download_dir") or default_download_dir(), is_audio=(current_mode[0] == "Audio"), 
                 selected_fid=format_map.get(qm.currentText()), duration_str=dur_str, 
                 site_name=site, thumb_url=thumb_url, fav_path=fav_path,
-                start_time=start_time, end_time=end_time
+                start_time=start_time, end_time=end_time,
+                audio_bitrate=(parse_kbps(qm.currentText()) if current_mode[0] == "Audio" else None)
             )
             self._dl_items.append(item)
             self._dl_item_added(item)

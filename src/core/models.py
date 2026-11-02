@@ -16,7 +16,7 @@ class AppSignals(QObject):
 
 class DownloadItem:
     _counter = int(time.time())
-    def __init__(self, url, title, channel, thumb_path, out_dir, is_audio, selected_fid, duration_str, site_name, thumb_url=None, fav_path=None, start_time=None, end_time=None):
+    def __init__(self, url, title, channel, thumb_path, out_dir, is_audio, selected_fid, duration_str, site_name, thumb_url=None, fav_path=None, start_time=None, end_time=None, audio_bitrate=None):
         DownloadItem._counter += 1
         self.id = DownloadItem._counter
         self.url, self.title, self.channel = url, title, channel
@@ -24,6 +24,7 @@ class DownloadItem:
         self.out_dir, self.is_audio, self.selected_fid = out_dir, is_audio, selected_fid
         self.duration_str, self.site_name = duration_str, site_name
         self.start_time, self.end_time = start_time, end_time
+        self.audio_bitrate = audio_bitrate        # MP3 kbps chosen for an audio download (None = default)
         self.status, self.percent, self.speed, self.eta, self.downloaded, self.total_size, self.error_msg = "active", 0.0, "", "", "", "", ""
         self.final_path = None
         self.timestamp = datetime.now().strftime("%H:%M")

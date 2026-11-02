@@ -95,7 +95,7 @@ class ElidedLabel(QLabel):
     A normal QLabel's minimum width is its full text width, so a long title (or one
     long unbroken word) used to stretch the whole download card - and the scroll
     area - past the right edge of the window. This label elides to whatever width
-    its layout gives it; the full text stays available as the tooltip.
+    its layout gives it.
 
     fit_text=False (default): ignores its text width entirely and takes the space
     the layout offers (use for a title that should fill its row).
@@ -115,7 +115,6 @@ class ElidedLabel(QLabel):
 
     def setFullText(self, text):
         self._full = str(text or "")
-        self.setToolTip(self._full)
         self._elide()
 
     def fullText(self):

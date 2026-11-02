@@ -1,5 +1,5 @@
 """Small helpers for the TrimLoad tab: time formatting/parsing, picking the preview stream, the invalid-input shake."""
-from src.core.downloader import _is_audio_only_url
+from src.core.downloader import _is_audio_only_url, snap_mp3_bitrate
 
 
 def format_time_str(seconds):
@@ -93,3 +93,46 @@ _TRIM_JIGGLE = (-10, 10, -7, 7, -4, 4, -2, 2, 0)      # a little gentler than th
 def jiggle_widget(widget):
     """The 'invalid input' shake used in this tab."""
     _shared_jiggle(widget, _TRIM_JIGGLE)
+
+
+def is_live_info(info):
+    """A live stream, or one that is scheduled but hasn't started - the same rule Home uses."""
+    return bool(info) and (bool(info.get("is_live")) or info.get("live_status") in ("is_live", "is_upcoming"))
+
+
+def live_message(info):
+    if (info or {}).get("live_status") == "is_upcoming":
+        return "This live stream hasn't started yet. Paste the link again once it has finished."
+    return "Live streams can't be trimmed. Paste a link to a finished video instead."
+
+
+def video_quality_items(info):
+    """[(label, format)] for Video mode: one entry per available resolution, best first."""
+    items, seen = [], set()
+    video_formats = [f for f in (info.get("formats") or []) if f.get("vcodec") not in ("none", None)]
+    for f in reversed(video_formats):
+        h = f.get("height")
+        if h and h not in seen:
+            seen.add(h)
+            items.append((f"{h}p", f))
+    return items or [("Best", None)]
+
+
+def audio_bitrate_items(info):
+    """[(label, {"format_id", "kbps"})] for Audio mode: the MP3 bitrates this media can really deliver,
+    best first. Downloads are encoded to MP3, so these are MP3 steps (a stream reporting 129.5 kbps
+    shows as 128). With no bitrate information at all, the usual ladder is offered."""
+    fmts = [f for f in (info.get("formats") or []) if f.get("acodec") not in (None, "none") and f.get("ext") != "mhtml"]
+    pure = [f for f in fmts if f.get("vcodec") in (None, "none")]
+    items, seen = [], set()
+    for f in (pure or fmts):
+        raw = f.get("abr") or (f.get("tbr") if f in pure else None)      # a muxed stream's tbr includes the video
+        if not raw:
+            continue
+        kbps = snap_mp3_bitrate(raw)
+        if kbps in seen:
+            continue
+        seen.add(kbps)
+        items.append((f"{kbps} kbps", {"format_id": f.get("format_id"), "kbps": kbps}))
+    items.sort(key=lambda it: it[1]["kbps"], reverse=True)
+    return items or [(f"{br} kbps", {"format_id": None, "kbps": br}) for br in (320, 256, 192, 128, 96, 64)]

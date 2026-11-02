@@ -397,8 +397,35 @@ class TrimUiMixin:
                 (self.video_frame.height() - self.preview_error_lbl.height()) // 2
             )
 
+    # defaults until a link has loaded (the real lists are set in _reveal_trim_result)
+    _video_items = ()
+    _audio_items = ()
+    _qual_memory = None
+    _qual_mode = None
+
+    def _fill_quality_combo(self, is_audio):
+        """Video mode lists resolutions; Audio mode lists MP3 bitrates instead. Each mode remembers
+        what was last picked, so flipping Video -> Audio -> Video returns to the same resolution."""
+        items = self._audio_items if is_audio else self._video_items
+        if not items or self._qual_memory is None:
+            return
+        mode = "audio" if is_audio else "video"
+        if self._qual_mode is not None and self._qual_mode != mode:
+            self._qual_memory[self._qual_mode] = max(0, self.qual_combo.currentIndex())
+        self.qual_combo.blockSignals(True)               # the caller refreshes the size estimate once, afterwards
+        try:
+            self.qual_combo.clear()
+            for text, data in items:
+                self.qual_combo.addItem(text, data)
+            self.qual_combo.setCurrentIndex(min(self._qual_memory.get(mode, 0), len(items) - 1))
+        finally:
+            self.qual_combo.blockSignals(False)
+        self._qual_mode = mode
+        self.qual_combo.setToolTip("Bitrate" if is_audio else "Quality")
+
     def _set_mode(self, is_audio):
         self.is_audio_mode = is_audio
+        self._fill_quality_combo(is_audio)
         
         act = f"QPushButton {{ background-color: #383838; color: {TEAL_ACCENT}; font-size: 13px; font-weight: 500; border-radius: 4px; border: none; }}"
         inact = f"QPushButton {{ background-color: transparent; color: {TEXT_MUTED}; font-size: 13px; font-weight: 500; border-radius: 4px; border: none; }}"

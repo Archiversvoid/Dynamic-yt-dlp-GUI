@@ -4,7 +4,7 @@ import os
 from PySide6.QtCore import QTimer
 from src.core.downloader import _site_name
 from src.paths import repo_root, thumb_dir
-from src.ui.trim.helpers import format_time_str, parse_time_str
+from src.ui.trim.helpers import format_time_str, is_live_info, jiggle_widget, parse_time_str
 
 
 class TrimDownloadMixin:
@@ -106,6 +106,10 @@ class TrimDownloadMixin:
                 
                 est_bytes = (bitrate_kbps * 1000 / 8) * duration_selected
 
+        if self.is_audio_mode and isinstance(fmt, dict) and fmt.get('kbps'):
+            # the output is an MP3 encoded at the chosen bitrate, so its size is bitrate x duration
+            est_bytes = (fmt['kbps'] * 1000 / 8) * duration_selected
+
         if est_bytes >= 1024 * 1024 * 1024:
             size_gb = est_bytes / (1024 * 1024 * 1024)
             self.est_size_lbl.setText(f"Est. size ~{size_gb:.2f} GB")
@@ -114,6 +118,10 @@ class TrimDownloadMixin:
             self.est_size_lbl.setText(f"Est. size ~{size_mb:.1f} MB")
 
     def _on_download(self):
+        if self.current_info and is_live_info(self.current_info):
+            jiggle_widget(self.btn_download)
+            self._show_toast_error("Can't download live streams")
+            return
         s_text = self.start_input.text().strip()
         e_text = self.end_input.text().strip()
         s = parse_time_str(s_text)
@@ -140,6 +148,7 @@ class TrimDownloadMixin:
         title = self.current_info.get('title', 'Trimmed Media')
         selected_fmt = self.qual_combo.currentData()
         selected_fid = selected_fmt.get('format_id') if isinstance(selected_fmt, dict) else selected_fmt
+        audio_bitrate = selected_fmt.get('kbps') if (self.is_audio_mode and isinstance(selected_fmt, dict)) else None
 
         thumb_path = None
         thumb_data = self.current_info.get('_thumb_data')
@@ -168,7 +177,8 @@ class TrimDownloadMixin:
             thumb_url=thumb_url,
             fav_path=self.current_info.get('_fav_path'),
             start_time=s,
-            end_time=e
+            end_time=e,
+            audio_bitrate=audio_bitrate
         )
         
         self.main_win._dl_items.append(item)

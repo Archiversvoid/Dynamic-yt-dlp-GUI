@@ -8,10 +8,11 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QCursor, QIcon, QPixmap
 from PySide6.QtMultimedia import QMediaPlayer
 from theme import ss as _ss
-from src.core.downloader import _fetch_favicon_sync, _get_yt_dlp, _site_name, DEFAULT_UA
+from src.core.downloader import _fetch_favicon_sync, _get_yt_dlp, _site_name, DEFAULT_UA, friendly_error
 from src.paths import repo_root
 from src.ui.styles import ERROR_RED, TEAL_ACCENT, TEXT_MAIN
-from src.ui.trim.helpers import format_time_str, select_preview_stream
+from src.ui.trim.helpers import (
+    audio_bitrate_items, format_time_str, is_live_info, live_message, select_preview_stream, video_quality_items)
 
 
 class TrimProcessingMixin:
@@ -64,6 +65,15 @@ class TrimProcessingMixin:
             with ydl_mod.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
             if cancelled[0]: return
+            if not info:
+                self.signals.error.emit(run_id, "Could not fetch media info.")
+                return
+            if is_live_info(info):
+                # A live stream has no fixed length and nothing to trim, and handing its endless stream
+                # to the preview player is what can hang or crash it. Stop here, before a stream is
+                # chosen or the player is touched.
+                self.signals.error.emit(run_id, live_message(info))
+                return
 
             self.signals.phase.emit(run_id, "process")
             preview_url, preview_height, is_audio_only = select_preview_stream(info, url)
@@ -89,7 +99,7 @@ class TrimProcessingMixin:
             if not cancelled[0]: self.signals.loaded.emit(info)
 
         except Exception as e:
-            if not cancelled[0]: self.signals.error.emit(run_id, str(e))
+            if not cancelled[0]: self.signals.error.emit(run_id, friendly_error(e)[:200])
 
     def _on_scrape_error(self, run_id, msg):
         if run_id != self._proc_run_id: return
@@ -99,6 +109,9 @@ class TrimProcessingMixin:
     def _on_metadata_loaded(self, info):
         if info.get('_run_id') != self._proc_run_id: return
         if self._proc_cancel_flag is not None and self._proc_cancel_flag[0]: return
+        if is_live_info(info):                      # second line of defence; the fetch already refuses live streams
+            self._on_scrape_error(info.get('_run_id'), live_message(info))
+            return
         run_id = self._proc_run_id
         def _reveal():
             if run_id != self._proc_run_id: return
@@ -167,19 +180,13 @@ class TrimProcessingMixin:
         self.time_lbl.setText(f"{format_time_str(0)} / {format_time_str(self.duration)}")
         self._reset_inputs_style()
 
+        # One list per mode - video resolutions, and MP3 bitrates for audio. _set_mode fills the
+        # combo from the right one (see _fill_quality_combo).
+        self._video_items = video_quality_items(info)
+        self._audio_items = audio_bitrate_items(info)
+        self._qual_memory = {"video": 0, "audio": 0}
+        self._qual_mode = None
         self.qual_combo.clear()
-        formats = info.get('formats', [])
-        video_formats = [f for f in formats if f.get('vcodec') not in ('none', None)]
-
-        if video_formats:
-            seen = set()
-            for f in reversed(video_formats):
-                h = f.get('height')
-                if h and h not in seen:
-                    seen.add(h)
-                    self.qual_combo.addItem(f"{h}p", f)
-        if self.qual_combo.count() == 0:
-            self.qual_combo.addItem("Best", None)
 
         is_pure_audio = info.get('_is_audio_only', False)
 

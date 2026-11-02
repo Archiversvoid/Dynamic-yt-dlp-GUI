@@ -161,7 +161,27 @@ def fetch_formats(url):
         return {"ok": False, "error": friendly_error(e)[:200]}
 
 
-def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start_time=None, end_time=None):
+MP3_BITRATES = (32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)      # the steps MP3 actually offers
+
+
+def snap_mp3_bitrate(value, default=192):
+    """Nearest real MP3 bitrate: a stream that reports 129.5 kbps becomes 128; above 320 becomes 320."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return default
+    if n <= 0:
+        return default
+    return min(MP3_BITRATES, key=lambda b: abs(b - n))
+
+
+def parse_kbps(text):
+    """'MP3 160kbps - 3.4 MB' or '160 kbps' -> 160 (None if there is no bitrate in the text)."""
+    m = re.search(r"(\d{2,3})\s*kbps", str(text or ""), re.I)
+    return int(m.group(1)) if m else None
+
+
+def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start_time=None, end_time=None, audio_bitrate=None):
     # Every path below needs ffmpeg (merging video+audio, audio conversion, trimming). Say so up front
     # instead of downloading everything and failing at the very last step.
     if not ffmpeg_available():
@@ -259,7 +279,7 @@ def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start
                 ydl_opts['format'] = 'bestaudio/best'
                 ydl_opts['writethumbnail'] = True
                 ydl_opts['postprocessors'] = [
-                    {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'},
+                    {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': str(snap_mp3_bitrate(audio_bitrate))},
                     {'key': 'FFmpegMetadata'},
                     {'key': 'EmbedThumbnail'},
                 ]

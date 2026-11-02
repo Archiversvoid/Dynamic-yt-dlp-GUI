@@ -281,7 +281,7 @@ class DownloadsMixin:
 
     def _start_download(self, item: DownloadItem):
         def _worker():
-            evts = fetcher_download(item.url, item.selected_fid, item.out_dir, item.is_audio, item.start_time, item.end_time)
+            evts = fetcher_download(item.url, item.selected_fid, item.out_dir, item.is_audio, item.start_time, item.end_time, item.audio_bitrate)
             for evt in evts:
                 if item._cancelled: break
                 t = evt.get("type")
