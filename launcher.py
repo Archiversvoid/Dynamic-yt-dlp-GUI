@@ -151,6 +151,11 @@ def _status(splash, app, text):
 
 
 def main():
+    # Already running (hidden in the tray)? Ask that copy to show itself and exit at once - this is what
+    # makes launching the app again instant. Done before Qt or anything heavy is imported.
+    from src.core.single_instance import claim_or_wake
+    if not claim_or_wake():
+        return
     _set_app_id()
     _init_theme()
 

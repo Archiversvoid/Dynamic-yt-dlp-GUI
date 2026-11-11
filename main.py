@@ -74,6 +74,7 @@ def configure_app(app):
     created, instead of duplicating it."""
     app.setWindowIcon(QIcon(str(repo_root / "icons" / "icon.ico")))
     install_font_safety()    # before any widget asks for a font
+    app.setQuitOnLastWindowClosed(False)    # closing the window hides to the tray; Quit in the tray menu exits
 
     app.setStyle(NoFocusRectStyle(app.style()))
 
@@ -88,6 +89,9 @@ def configure_app(app):
 
 
 def main():
+    from src.core.single_instance import claim_or_wake
+    if not claim_or_wake():            # already running (hidden in the tray): it has been asked to show itself
+        return
     app = QApplication(sys.argv)
     configure_app(app)
     window = DynamicPC()
