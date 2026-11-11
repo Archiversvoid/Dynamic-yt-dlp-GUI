@@ -5,22 +5,36 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import theme
 from urllib.parse import urlparse
 from PySide6.QtCore import QEasingCurve, QSize, Qt, QTimer, QUrl, QVariantAnimation
-from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPalette, QTransform
+from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QGuiApplication, QIcon, QPalette, QTransform
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QStackedWidget, QStyle,
-    QSystemTrayIcon, QVBoxLayout, QWidget)
+    QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
 from theme import qc as _qc, ss as _ss
 from src.core.downloader import _site_name
 from src.core.models import DownloadItem
 from src.core.prewarm import FilePrewarm, collect_multimedia_files
+from src.core.single_instance import wait_for_wake
 from src.paths import cache_dir, default_download_dir, favicon_dir, ICON_PATH, repo_root
 from src.ui.components.navigation import FilterTab, SidebarNavButton
 from src.ui.styles import (
     BG_DARK, CARD_BG, CARD_INNER_BG, SIDEBAR_DARK, TEAL_ACCENT, TEXT_MAIN, TEXT_MUTED)
+
+
+# The tray menu always looks like a standard light Windows menu, whichever app theme is selected - so it
+# is styled with plain setStyleSheet, NOT _ss (which would recolour it with the theme). Using a stylesheet
+# also removes the vertical icon-gutter line the native style draws down the left of the menu.
+TRAY_MENU_QSS = """
+QMenu { background-color: #FFFFFF; border: 1px solid #CCCCCC; padding: 2px 0px; font-family: "Segoe UI"; font-size: 12px; }
+QMenu::item { background-color: transparent; color: #000000; padding: 5px 28px 5px 30px; margin: 0px; }
+QMenu::item:selected { background-color: #E5E5E5; color: #000000; }
+QMenu::item:disabled { color: #8C8C8C; }
+QMenu::separator { height: 1px; background-color: #D7D7D7; margin: 4px 1px 4px 1px; }
+"""
 
 
 class WindowMixin:
@@ -53,11 +67,41 @@ class WindowMixin:
                 json.dump(self.settings, f, indent=4)
         except Exception: pass
 
-    def _restore_and_show_tab(self, idx):
-        self.showNormal()
-        self.activateWindow()
+    def _reveal_window(self):
+        """Bring the window back exactly as it was. showNormal() used to be called here, which drops a
+        maximized window back to its restored size; show() keeps whatever state the window had, and only
+        a minimized flag is cleared."""
+        state = self.windowState()
+        if state & Qt.WindowState.WindowMinimized:
+            self.setWindowState((state & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+        self.show()
         self.raise_()
-        self._show_tab(idx)
+        self.activateWindow()
+
+    def _restore_and_show_tab(self, idx=None):
+        self._reveal_window()
+        if idx is not None:
+            self._show_tab(idx)
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._reveal_window()
+
+    def _start_wake_listener(self):
+        """A second launch signals a Windows event (see src/core/single_instance.py). This thread waits
+        for it and asks the window to show itself."""
+        if getattr(self, "_wake_started", False):
+            return
+        self._wake_started = True
+        self.signals.wake.connect(self._reveal_window)
+
+        def listen():
+            while wait_for_wake():
+                try:
+                    self.signals.wake.emit()
+                except RuntimeError:
+                    return                                       # the window is gone
+        threading.Thread(target=listen, daemon=True).start()
 
     def _setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
@@ -79,6 +123,10 @@ class WindowMixin:
         action_downloads = QAction("Downloads", self)
         action_downloads.triggered.connect(lambda: self._restore_and_show_tab(2))
         self.tray_menu.addAction(action_downloads)
+
+        action_settings = QAction("Settings", self)
+        action_settings.triggered.connect(lambda: self._restore_and_show_tab(3))
+        self.tray_menu.addAction(action_settings)
         
         self.tray_menu.addSeparator()
         
@@ -86,9 +134,24 @@ class WindowMixin:
         action_quit.triggered.connect(QApplication.instance().quit)
         self.tray_menu.addAction(action_quit)
         
+        # look: like a standard light Windows menu, always (see TRAY_MENU_QSS)
+        self.tray_menu.setStyleSheet(TRAY_MENU_QSS)
+        self.tray_menu.setMinimumWidth(190)
+        light = QPalette(self.tray_menu.palette())
+        for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base, QPalette.ColorRole.Button):
+            light.setColor(role, QColor("#FFFFFF"))
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+            light.setColor(role, QColor("#000000"))
+        self.tray_menu.setPalette(light)
+        default_font = action_dynamic.font()                      # the default action ("Open") is bold, as in Windows menus
+        default_font.setBold(True)
+        action_dynamic.setFont(default_font)
+
         self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.show()
         self.tray_icon.messageClicked.connect(self._on_tray_message_clicked)
+        self.tray_icon.activated.connect(self._on_tray_activated)             # a click on the icon reveals the window
+        QApplication.instance().aboutToQuit.connect(self._persist_state)      # "Quit" in the tray menu really exits: save first
 
     def _on_tray_message_clicked(self):
         self._restore_and_show_tab(2)
@@ -166,6 +229,25 @@ class WindowMixin:
             except Exception: pass
 
     def closeEvent(self, event):
+        """Closing the window hides Dynamic in the tray instead of quitting: downloads keep going, and
+        launching the app again just brings this copy back instead of starting a new one. "Quit" in the
+        tray menu really exits."""
+        self._persist_state()
+        # Windows logging off / shutting down: never block it by refusing to close
+        app = QGuiApplication.instance()
+        try:
+            saving = bool(app is not None and app.isSavingSession())       # an instance method - calling it on the class raised TypeError
+        except Exception:
+            saving = False
+        if saving or not QSystemTrayIcon.isSystemTrayAvailable():
+            event.accept()
+            QApplication.instance().quit()
+            return
+        event.ignore()
+        self.hide()
+
+    def _persist_state(self):
+        """Save settings and the downloads list (on close, and again on Quit)."""
         # Save current sidebar state to settings dictionary
         self.settings["sidebar_collapsed"] = self._sidebar_collapsed
         self._save_settings()
@@ -186,7 +268,6 @@ class WindowMixin:
             with open(repo_root / "downloads.json", "w") as f: json.dump(data, f)
         except Exception:
             pass
-        event.accept()
 
     def _setup_ui(self):
         main_widget = QWidget()
@@ -293,6 +374,7 @@ class WindowMixin:
                             (P.Link, QColor(theme.accent_text()))):
             pal.setColor(role, color)
         QApplication.instance().setPalette(pal)
+        QToolTip.setPalette(pal)                    # tooltips use their own palette; without this they were white text on a white box in dark mode
 
     def _apply_theme(self, setting=None):
         """Switch theme live. Every widget styled through _ss re-applies its
@@ -376,6 +458,7 @@ class WindowMixin:
         if not getattr(self, "_sched_started", False):
             self._sched_started = True
             QTimer.singleShot(6000, lambda: self._check_scheduled_updates(startup=True))
+            self._start_wake_listener()
             QTimer.singleShot(1500, self._start_prewarm)
             try:                                                    # Windows switching its own light/dark mode must not turn the title bar dark again
                 from PySide6.QtGui import QGuiApplication

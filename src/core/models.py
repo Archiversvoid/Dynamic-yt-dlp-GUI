@@ -12,6 +12,7 @@ class AppSignals(QObject):
     home_phase = Signal(int, str)
     binary_version = Signal(str, str)          # name, text
     update_done = Signal(str, bool, str)       # name, ok, 'updated' | 'current' | error text
+    wake = Signal()                            # a second launch asked this copy to show itself
 
 
 class DownloadItem:
