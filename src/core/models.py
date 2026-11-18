@@ -13,6 +13,10 @@ class AppSignals(QObject):
     binary_version = Signal(str, str)          # name, text
     update_done = Signal(str, bool, str)       # name, ok, 'updated' | 'current' | error text
     wake = Signal()                            # a second launch asked this copy to show itself
+    binary_installed = Signal(str, bool, str)  # name, ok, '' | 'invalid:<reason>' | error text
+    app_update_checked = Signal(object)         # {'manual', 'info', 'error'}
+    app_update_progress = Signal(int)           # percent downloaded
+    app_update_done = Signal(bool, str)         # ok, new version | error text
 
 
 class DownloadItem:

@@ -2,7 +2,7 @@
 from PySide6.QtCore import (
     QEasingCurve, QObject, QParallelAnimationGroup, QPoint, QPropertyAnimation, Qt, QTimer,
     Signal)
-from PySide6.QtGui import QColor, QCursor, QIcon
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon
 from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton
 from theme import ss as _ss
 from src.paths import ICON_PATH
@@ -13,7 +13,14 @@ class ToastWidget(QFrame):
     def __init__(self, message, parent=None, icon_pixmap=None, rich_text=False):
         super().__init__(parent)
         self.setWindowIcon(QIcon(ICON_PATH))
-        self.setFixedSize(290, 48)
+        height = 48
+        if not rich_text:                           # a long message wraps onto more lines (and the toast grows) instead of being cut off
+            f = QFont()
+            f.setPixelSize(13)
+            f.setWeight(QFont.Weight.Medium)
+            text_h = QFontMetrics(f).boundingRect(0, 0, 180, 1000, 0x1000, message).height()      # 0x1000 = Qt.TextWordWrap
+            height = max(48, text_h + 26)
+        self.setFixedSize(290, height)
         _ss(self, "QFrame { background-color: #242424; border: 1px solid #333333; border-radius: 12px; }")
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(16)
@@ -33,6 +40,7 @@ class ToastWidget(QFrame):
             _ss(icon_lbl, "color: #EF4444; font-size: 15px; font-weight: bold; border: none; background: transparent;")
         layout.addWidget(icon_lbl)
         msg_lbl = QLabel(message)
+        msg_lbl.setWordWrap(True)
         if rich_text:
             msg_lbl.setTextFormat(Qt.TextFormat.RichText)
         _ss(msg_lbl, "color: #FFFFFF; font-size: 13px; font-weight: 500; border: none; background: transparent;")
@@ -70,9 +78,12 @@ class ToastManager(QObject):
     def _reposition_toasts(self, animate_last=False):
         if not self.win: return
         w_width, w_height = self.win.width(), self.win.height()
+        offset = 24
         for i, toast in enumerate(self.toasts):
+            offset += toast.height()
             target_x = w_width - 24 - 290
-            target_y = w_height - 24 - (i + 1) * 48 - i * 10
+            target_y = w_height - offset
+            offset += 10
             if animate_last and i == len(self.toasts) - 1:
                 toast.move(target_x, w_height + 20)
                 anim = QPropertyAnimation(toast, b"pos", toast)

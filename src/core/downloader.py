@@ -4,7 +4,9 @@ import shutil
 import sys
 import urllib.request
 from urllib.parse import urlparse
-from src.paths import favicon_dir, repo_root
+from src.core import ytdlp_cli
+from src.core.binaries import ffmpeg_location, get_binary_path, ytdlp_exe
+from src.paths import favicon_dir, FROZEN, logs_dir, repo_root
 
 
 yt_dlp = None  # imported lazily - see _get_yt_dlp(). Importing it eagerly at
@@ -14,14 +16,37 @@ yt_dlp = None  # imported lazily - see _get_yt_dlp(). Importing it eagerly at
 
 
 def _get_yt_dlp():
+    """The yt-dlp Python module, or None. Only a run from source with the package installed has it; a compiled
+    build runs the standalone yt-dlp.exe from bin\\ instead (src/core/ytdlp_cli.py)."""
     global yt_dlp
-    if yt_dlp is None:
-        try:
-            import yt_dlp as _yt_dlp
-            yt_dlp = _yt_dlp
-        except Exception:
-            yt_dlp = False
+    if yt_dlp:
+        return yt_dlp
+    try:
+        import yt_dlp as _yt_dlp
+        yt_dlp = _yt_dlp
+    except Exception:
+        pass
     return yt_dlp or None
+
+
+def ytdlp_unavailable_message():
+    return YTDLP_MISSING_MSG
+
+
+def reset_yt_dlp():
+    global yt_dlp
+    yt_dlp = None
+
+
+def warm_up_ytdlp():
+    """Shortly after launch: import the Python package (source run) or start yt-dlp.exe once (compiled), so the
+    first link you paste doesn't pay for the cold start."""
+    if _get_yt_dlp() is not None:
+        return
+    try:
+        ytdlp_cli.warm_up()
+    except Exception:
+        pass
 
 
 _AUDIO_ONLY_DOMAINS = (
@@ -76,7 +101,8 @@ def _fetch_favicon_sync(url):
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _ANSI_BARE_RE = re.compile(r"\[(?:\d{1,3};)*\d{1,3}m")      # the same colour codes once the ESC byte has been lost
-FFMPEG_MISSING_MSG = "ffmpeg wasn't found. Open Settings > Update, click Update next to ffmpeg, then press Retry."
+FFMPEG_MISSING_MSG = "ffmpeg isn't installed. Install from settings."
+YTDLP_MISSING_MSG = "yt-dlp isn't installed. Install from settings."
 
 
 def strip_ansi(text):
@@ -97,8 +123,7 @@ def friendly_error(err):
 
 def ffmpeg_available():
     """ffmpeg next to the app (where Settings > Update puts it) or anywhere on PATH."""
-    local = repo_root / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-    return local.exists() or shutil.which("ffmpeg") is not None
+    return get_binary_path("ffmpeg") is not None
 
 
 def _fetch_formats_subprocess(url):
@@ -130,6 +155,22 @@ def _fetch_formats_subprocess(url):
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
 
+def _fetch_formats_exe(url):
+    """Home fetch through the standalone yt-dlp.exe."""
+    import importlib
+    try:
+        try:
+            scraper = importlib.import_module("src.core.universal_scraper")
+        except ImportError:
+            scraper = importlib.import_module("universal_scraper")
+        info = ytdlp_cli.extract_info(url, DEFAULT_UA, youtube=_is_youtube_url(url))
+        if not info:
+            return {"ok": False, "error": "Could not fetch media info."}
+        return scraper.result_from_info(info)
+    except Exception as e:
+        return {"ok": False, "error": friendly_error(e)[:200]}
+
+
 def fetch_formats(url):
     """Media info + format lists for the Home tab.
 
@@ -140,6 +181,10 @@ def fetch_formats(url):
     player_client=tv,web_safari option TrimLoad passes, which skips YouTube's slow challenge solving."""
     yt = _get_yt_dlp()
     if yt is None:
+        if ytdlp_exe() is not None:
+            return _fetch_formats_exe(url)
+        if FROZEN:
+            return {"ok": False, "error": ytdlp_unavailable_message()}
         return _fetch_formats_subprocess(url)
     import importlib
     try:
@@ -192,6 +237,7 @@ def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start
     import os
     
     q = queue.Queue()
+    cli_state = {"proc": None, "stop": False}        # the yt-dlp.exe process, when that is what runs the download
 
     def format_size(b):
         if not b: return "0 MB"
@@ -244,7 +290,12 @@ def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start
             import glob
             ydl_mod = _get_yt_dlp()
             if ydl_mod is None:
-                q.put({"type": "error", "message": "yt-dlp library missing"})
+                if ytdlp_exe() is None:
+                    q.put({"type": "error", "message": ytdlp_unavailable_message()})
+                    return
+                # compiled build: the standalone yt-dlp.exe does the work
+                ytdlp_cli.run_download(q, cli_state, url, selected_fid, out_dir, is_audio, start_time, end_time,
+                                       snap_mp3_bitrate(audio_bitrate), _is_youtube_url(url), friendly_error)
                 return
             os.makedirs(out_dir, exist_ok=True)
             ydl_opts = {
@@ -272,8 +323,9 @@ def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start
                         final_path_holder['path'] = fp
             ydl_opts['postprocessor_hooks'] = [_pp_hook]
             ydl_opts['no_color'] = True; ydl_opts['color'] = 'no_color'   # plain-text errors (no ANSI codes in the card)
-            if (repo_root / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg')).exists():
-                ydl_opts['ffmpeg_location'] = str(repo_root)   # use the copy Settings > Update maintains
+            _ffdir = ffmpeg_location()
+            if _ffdir:
+                ydl_opts['ffmpeg_location'] = _ffdir   # the ffmpeg registered in binary_dir.json / bin\\
 
             if is_audio:
                 ydl_opts['format'] = 'bestaudio/best'
@@ -345,13 +397,16 @@ def fetcher_download(url, selected_fid=None, out_dir=None, is_audio=False, start
     t = threading.Thread(target=run_dl, daemon=True)
     t.start()
 
-    while True:
-        try:
-            item = q.get(timeout=0.1)
-            yield item
-            if item.get("type") in ("done", "error"):
-                break
-        except queue.Empty:
-            if not t.is_alive():
-                yield {"type": "error", "message": "Download thread terminated unexpectedly"}
-                break
+    try:
+        while True:
+            try:
+                item = q.get(timeout=0.1)
+                yield item
+                if item.get("type") in ("done", "error"):
+                    break
+            except queue.Empty:
+                if not t.is_alive():
+                    yield {"type": "error", "message": "Download thread terminated unexpectedly"}
+                    break
+    finally:
+        ytdlp_cli.stop(cli_state)        # cancelled/paused (or finished): make sure no yt-dlp.exe keeps running

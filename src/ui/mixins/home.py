@@ -10,7 +10,9 @@ from PySide6.QtGui import QCursor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget)
 from theme import ss as _ss
-from src.core.downloader import _fetch_favicon_sync, _get_yt_dlp, _is_audio_only_url, _site_name, fetch_formats, parse_kbps, strip_ansi
+from src.core.downloader import (
+    _fetch_favicon_sync, _get_yt_dlp, _is_audio_only_url, _site_name, fetch_formats,
+    parse_kbps, strip_ansi, warm_up_ytdlp)
 from src.core.models import DownloadItem
 from src.paths import default_download_dir, repo_root, thumb_dir
 from src.ui.components.combo import AnimatedComboBox
@@ -60,9 +62,9 @@ class HomeMixin:
                 w.deleteLater()
 
     def _warm_up_ytdlp(self):
-        """Import yt-dlp (about 1,700 extractor modules - several seconds on a cold start) in the
-        background shortly after launch, so the first link you paste doesn't pay for it."""
-        threading.Thread(target=_get_yt_dlp, daemon=True).start()
+        """Warm yt-dlp up in the background shortly after launch (import the package, or start yt-dlp.exe once), so
+        the first link you paste doesn't pay for the cold start."""
+        threading.Thread(target=warm_up_ytdlp, daemon=True).start()
 
     def _process_link(self, url, start_time=None, end_time=None):
         if not url: return

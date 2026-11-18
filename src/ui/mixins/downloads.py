@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from theme import ss as _ss
 from src.core.downloader import fetcher_download, friendly_error, strip_ansi
 from src.core.models import DownloadItem
-from src.paths import ICON_PATH, repo_root
+from src.paths import ICON_PATH, logs_dir, repo_root
 from src.ui.components.controls import ElidedLabel, ModernScrollArea
 from src.ui.components.navigation import FilterTabBar
 from src.ui.components.skeleton import ShimmerBox, SkeletonBox
@@ -154,7 +154,7 @@ class DownloadsMixin:
         self._sync_dl_filter_view()
         if self._dl_slow:                                   # something took >250 ms to build: leave a trace for diagnosis
             try:
-                d = repo_root / "logs"; d.mkdir(parents=True, exist_ok=True)
+                d = logs_dir; d.mkdir(parents=True, exist_ok=True)
                 with open(d / "ui_timing.log", "a", encoding="utf-8") as f:
                     for title, dt in self._dl_slow:
                         f.write("[%s] slow download card (%.0f ms): %s\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), dt * 1000, title))
@@ -302,7 +302,7 @@ class DownloadsMixin:
 
     def _log_download_error(self, item):
         try:
-            log_dir = repo_root / "logs"
+            log_dir = logs_dir
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             clean_err = strip_ansi(item.error_msg or "Unknown error").strip().replace("\n", " ")

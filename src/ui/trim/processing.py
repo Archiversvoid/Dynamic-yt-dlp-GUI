@@ -8,7 +8,10 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QCursor, QIcon, QPixmap
 from PySide6.QtMultimedia import QMediaPlayer
 from theme import ss as _ss
-from src.core.downloader import _fetch_favicon_sync, _get_yt_dlp, _site_name, DEFAULT_UA, friendly_error
+from src.core import ytdlp_cli
+from src.core.binaries import ytdlp_exe
+from src.core.downloader import (
+    _fetch_favicon_sync, _get_yt_dlp, _site_name, DEFAULT_UA, friendly_error, ytdlp_unavailable_message)
 from src.paths import repo_root
 from src.ui.styles import ERROR_RED, TEAL_ACCENT, TEXT_MAIN
 from src.ui.trim.helpers import (
@@ -41,8 +44,8 @@ class TrimProcessingMixin:
 
     def _scrape_and_load(self, url, run_id, cancelled):
         ydl_mod = _get_yt_dlp()
-        if ydl_mod is None:
-            self.signals.error.emit(run_id, "yt-dlp library missing")
+        if ydl_mod is None and ytdlp_exe() is None:
+            self.signals.error.emit(run_id, ytdlp_unavailable_message())
             return
 
         try:
@@ -62,8 +65,11 @@ class TrimProcessingMixin:
                 ydl_opts['extractor_args'] = {'youtube': ['player_client=tv,web_safari']}
                 ydl_opts['http_headers'] = {'Accept-Language': 'en-US,en;q=0.9'}
 
-            with ydl_mod.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            if ydl_mod is not None:
+                with ydl_mod.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:                          # compiled build: the standalone yt-dlp.exe
+                info = ytdlp_cli.extract_info(url, DEFAULT_UA, youtube=("youtube.com" in url or "youtu.be" in url))
             if cancelled[0]: return
             if not info:
                 self.signals.error.emit(run_id, "Could not fetch media info.")

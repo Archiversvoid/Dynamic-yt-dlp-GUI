@@ -19,7 +19,11 @@ from src.core.downloader import _site_name
 from src.core.models import DownloadItem
 from src.core.prewarm import FilePrewarm, collect_multimedia_files
 from src.core.single_instance import wait_for_wake
-from src.paths import cache_dir, default_download_dir, favicon_dir, ICON_PATH, repo_root
+from src.ui.mixins.appupdate import AppUpdateMixin
+from src.ui.mixins.binaries import BinariesMixin
+from src.paths import (
+    cache_dir, default_download_dir, downloads_file, favicon_dir, ICON_PATH, logs_dir,
+    repo_root, settings_file)
 from src.ui.components.navigation import FilterTab, SidebarNavButton
 from src.ui.styles import (
     BG_DARK, CARD_BG, CARD_INNER_BG, SIDEBAR_DARK, TEAL_ACCENT, TEXT_MAIN, TEXT_MUTED)
@@ -37,7 +41,7 @@ QMenu::separator { height: 1px; background-color: #D7D7D7; margin: 4px 1px 4px 1
 """
 
 
-class WindowMixin:
+class WindowMixin(BinariesMixin, AppUpdateMixin):
     """The main window: settings file, tray icon, titlebar, theme switching, sidebar, tab switching."""
 
     def _load_settings(self):
@@ -46,7 +50,7 @@ class WindowMixin:
             "sidebar_collapsed": False,  # Added default state
             "theme": "Default",
         }
-        settings_path = repo_root / "settings.json"
+        settings_path = settings_file
         if settings_path.exists():
             try:
                 with open(settings_path, "r") as f:
@@ -63,7 +67,7 @@ class WindowMixin:
 
     def _save_settings(self):
         try:
-            with open(repo_root / "settings.json", "w") as f:
+            with open(settings_file, "w") as f:
                 json.dump(self.settings, f, indent=4)
         except Exception: pass
 
@@ -159,6 +163,7 @@ class WindowMixin:
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "toast_mgr"): self.toast_mgr.update_positions()
+        if hasattr(self, "binary_toasts"): self.binary_toasts.relayout()
 
     def _open_qurl(self, qurl): QDesktopServices.openUrl(qurl)
 
@@ -199,11 +204,11 @@ class WindowMixin:
 
     def _load_icons(self):
         self._icons = {}
-        for name in ["home", "scissors", "downloads", "settings", "pause", "play", "trash", "trash red", "retry", "check", "collapse", "expand", "arrow-right", "info", "github", "reddit", "discord"]:
+        for name in ["home", "scissors", "downloads", "settings", "pause", "play", "trash", "trash red", "retry", "check", "collapse", "expand", "arrow-right", "info", "github", "reddit", "discord", "warning"]:
             self._icons[name] = theme.icon(name, repo_root / "icons", cache_dir)
 
     def _load_downloads(self):
-        file_path = repo_root / "downloads.json"
+        file_path = downloads_file
         if file_path.exists():
             try:
                 with open(file_path, "r") as f:
@@ -265,7 +270,7 @@ class WindowMixin:
                 "final_path": item.final_path
             })
         try:
-            with open(repo_root / "downloads.json", "w") as f: json.dump(data, f)
+            with open(downloads_file, "w") as f: json.dump(data, f)
         except Exception:
             pass
 
@@ -459,6 +464,8 @@ class WindowMixin:
             self._sched_started = True
             QTimer.singleShot(6000, lambda: self._check_scheduled_updates(startup=True))
             self._start_wake_listener()
+            QTimer.singleShot(400, self._init_binary_toasts)
+            QTimer.singleShot(7000, self._init_app_updates)
             QTimer.singleShot(1500, self._start_prewarm)
             try:                                                    # Windows switching its own light/dark mode must not turn the title bar dark again
                 from PySide6.QtGui import QGuiApplication
@@ -508,6 +515,10 @@ class WindowMixin:
         for i, btn in enumerate(self.nav_btns):
             btn.set_active(i == idx)
         if idx == 2: self._ensure_dl_list_loaded()
+        if hasattr(self, "binary_toasts"):
+            if idx in (0, 1):                        # Home and TrimLoad
+                self._refresh_binary_toasts()        # also picks up a binary installed meanwhile (e.g. from Settings > Update)
+            self.binary_toasts.set_page_visible(idx in (0, 1))
 
     # ------------------------------------------------------------------
     # Building the TrimLoad tab.
@@ -605,7 +616,7 @@ class WindowMixin:
                 ph.setText("Couldn't load TrimLoad: %s" % str(e)[:160])
             try:
                 import traceback
-                d = repo_root / "logs"; d.mkdir(parents=True, exist_ok=True)
+                d = logs_dir; d.mkdir(parents=True, exist_ok=True)
                 with open(d / "ui_timing.log", "a", encoding="utf-8") as f:
                     f.write(traceback.format_exc() + "\n")
             except Exception:
@@ -614,6 +625,8 @@ class WindowMixin:
             QApplication.restoreOverrideCursor()
             self._constructing_trim = False
             self._trim_building = False
+            if hasattr(self, "binary_toasts"):
+                self.binary_toasts.relayout()        # the new TrimLoad page must not cover the toasts
 
     def _handle_trim_request(self, url, start, end):
         self._show_tab(0)

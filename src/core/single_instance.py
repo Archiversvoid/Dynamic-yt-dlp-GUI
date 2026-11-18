@@ -84,7 +84,7 @@ def wait_for_wake():
         return False
 
 
-def claim_or_wake(timeout=10.0, create_mutex=None, signal=None, sleep=time.sleep, clock=time.monotonic):
+def claim_or_wake(timeout=10.0, create_mutex=None, signal=None, sleep=time.sleep, clock=time.monotonic, restart=False):
     """True  -> this process is the main copy: carry on starting.
     False -> a copy was already running and has been asked to show itself: exit now.
 
@@ -96,6 +96,13 @@ def claim_or_wake(timeout=10.0, create_mutex=None, signal=None, sleep=time.sleep
         create_mutex = _create_mutex
     signal = signal or _signal_running_instance
     if create_mutex():
+        return True
+    if restart:                                              # started by the app itself after an update: the old copy is closing -
+        deadline = clock() + 20.0                            # wait for it to let go, don't wake it
+        while clock() < deadline:
+            sleep(0.25)
+            if create_mutex():
+                return True
         return True
     deadline = clock() + timeout
     while True:                                              # the other copy may have only just created its event
