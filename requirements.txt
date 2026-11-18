@@ -1,0 +1,4 @@
+# What the build needs (CI installs exactly this).
+# For repeatable builds pin the versions you tested locally:  pip show PySide6 pyinstaller
+PySide6>=6.6
+pyinstaller>=6.3

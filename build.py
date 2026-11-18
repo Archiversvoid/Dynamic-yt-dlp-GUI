@@ -3,6 +3,7 @@
     py build.py                     pictures, PyInstaller, completes dist\\Dynamic, makes the installer
     py build.py --installer-only    skip PyInstaller (reuse dist\\Dynamic); refresh the extras and the installer
     py build.py --zip-only          only make the update zip (dist\\Dynamic-<version>-update.zip) from the app already built
+    py build.py --version 1.2.3     first write 1.2.3 into src\\core\\app_info.py (the GitHub workflow does this from the tag)
     py build.py --sign              also code-sign Dynamic.exe and the installer (see SIGNING below)
 
 Needs: Python with PyInstaller + PySide6 installed, and Inno Setup 6.3+.
@@ -194,9 +195,34 @@ def find_iscc():
     return next((c for c in cands if c and os.path.isfile(c)), None)
 
 
+def _arg_value(argv, flag):
+    if flag in argv:
+        i = argv.index(flag)
+        return argv[i + 1] if i + 1 < len(argv) else ""
+    return None
+
+
+def set_version(version):
+    """Stamp APP_VERSION in src/core/app_info.py - the one place the app takes its version from. CI passes the git tag's
+    version here, so the installed app, the installer and the release can never disagree (a mismatch would make the app
+    offer an update to itself forever)."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version or ""):
+        sys.exit("--version needs three numbers like 1.2.3 (got %r). Tag releases as v1.2.3." % (version,))
+    path = ROOT / "src" / "core" / "app_info.py"
+    text = path.read_bytes().decode("utf-8")                     # bytes: keeps the file's line endings as they are
+    new, n = re.subn(r'(APP_VERSION\s*=\s*")[^"]*(")', lambda m: m.group(1) + version + m.group(2), text)
+    if n != 1:
+        sys.exit("could not find APP_VERSION in src/core/app_info.py")
+    path.write_bytes(new.encode("utf-8"))
+
+
 def main(argv):
     installer_only, do_sign, zip_only = "--installer-only" in argv, "--sign" in argv, "--zip-only" in argv
     print("build.py: makes the update zip (in the dist folder) and the installer (in the Output folder)", flush=True)
+    wanted = _arg_value(argv, "--version")
+    if wanted is not None:
+        set_version(wanted)
+        print("version set to %s (src/core/app_info.py)" % wanted, flush=True)
     if not zip_only:
         step("1/4  Installer pictures (from icon 2.ico)")
         make_installer_art()
