@@ -1,0 +1,76 @@
+name: Build release
+
+# Push a tag like v1.2.3 and this builds the installer and the in-app update package, then attaches both to a DRAFT release.
+# Nothing is visible to the app until you press "Publish release" on GitHub.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:                 # Actions tab -> Run workflow: a test build, kept as a downloadable artifact (no release)
+
+permissions:
+  contents: write                    # needed to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version from the tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=" >> "$GITHUB_ENV"        # manual test run: keep the version written in src/core/app_info.py
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the Python packages
+        run: python -m pip install -r requirements.txt
+
+      - name: Install the current Inno Setup
+        shell: pwsh
+        run: choco upgrade innosetup -y --no-progress
+
+      - name: Build (app + update zip + installer)
+        shell: bash
+        run: |
+          if [ -n "$VERSION" ]; then python build.py --version "$VERSION"; else python build.py; fi
+
+      - name: List what was built
+        shell: pwsh
+        run: Get-ChildItem dist, Output | Where-Object { -not $_.PSIsContainer } | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Keep the files (test runs only)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dynamic-test-build
+          path: |
+            Output/*.exe
+            dist/*-update.zip
+            Output/*.sha256.txt
+            dist/*.sha256.txt
+
+      - name: Attach to a draft release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Dynamic ${{ env.VERSION }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            Output/*.exe
+            dist/*-update.zip
+            Output/*.sha256.txt
+            dist/*.sha256.txt
