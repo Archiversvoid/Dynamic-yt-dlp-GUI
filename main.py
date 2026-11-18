@@ -72,7 +72,7 @@ def configure_app(app):
     launcher.py (the light startup stub that shows a splash screen first)
     can apply exactly the same setup to the QApplication it already
     created, instead of duplicating it."""
-    app.setWindowIcon(QIcon(str(repo_root / "icons" / "icon.ico")))
+    app.setWindowIcon(QIcon(ICON_PATH))
     install_font_safety()    # before any widget asks for a font
     app.setQuitOnLastWindowClosed(False)    # closing the window hides to the tray; Quit in the tray menu exits
 
@@ -90,7 +90,7 @@ def configure_app(app):
 
 def main():
     from src.core.single_instance import claim_or_wake
-    if not claim_or_wake():            # already running (hidden in the tray): it has been asked to show itself
+    if not claim_or_wake(restart="--restart" in sys.argv):            # already running (hidden in the tray): it has been asked to show itself
         return
     app = QApplication(sys.argv)
     configure_app(app)

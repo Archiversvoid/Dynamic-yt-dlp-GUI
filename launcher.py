@@ -75,9 +75,18 @@ def _write_profile_report(prof):
     if prof is not None:
         out.write("\nWINDOW CONSTRUCTION - top functions by cumulative time (cProfile)\n")
         pstats.Stats(prof, stream=out).sort_stats("cumulative").print_stats(25)
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "startup_profile.txt")
+    path = str(_data_path("startup_profile.txt", Path(os.path.dirname(os.path.abspath(__file__)))))
     with open(path, "w", encoding="utf-8") as f:
         f.write(out.getvalue())
+
+
+def _data_path(name, fallback_base):
+    """Settings and log files live in the data folder (%APPDATA%\\Dynamic when compiled, the project folder from source)."""
+    try:
+        from src.paths import data_dir, logs_dir
+        return (logs_dir if name.startswith("startup_profile") else data_dir) / name
+    except Exception:
+        return fallback_base / name
 
 
 def _init_theme():
@@ -88,7 +97,7 @@ def _init_theme():
             base = Path(sys.executable).resolve().parent
         else:
             base = Path(__file__).resolve().parent
-        path = base / "settings.json"
+        path = _data_path("settings.json", base)
         saved = json.load(open(path, encoding="utf-8")).get("theme", "Default")
     except Exception:
         saved = "Default"
@@ -154,8 +163,19 @@ def main():
     # Already running (hidden in the tray)? Ask that copy to show itself and exit at once - this is what
     # makes launching the app again instant. Done before Qt or anything heavy is imported.
     from src.core.single_instance import claim_or_wake
-    if not claim_or_wake():
+    if not claim_or_wake(restart="--restart" in sys.argv):
         return
+    if getattr(sys, "frozen", False):
+        # The compiled app ships without Qt's FFmpeg video backend (about 75 MB); use Windows' own (Media Foundation)
+        # unless that plugin is present in this install.
+        _ff = Path(sys.executable).resolve().parent / "_internal" / "PySide6" / "plugins" / "multimedia" / "ffmpegmediaplugin.dll"
+        if not _ff.exists():
+            os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
+    if getattr(sys, "frozen", False):
+        # a windowed (console-less) build has no stdout/stderr/stdin; libraries that touch them (yt-dlp does) would crash
+        for _name, _mode in (("stdout", "w"), ("stderr", "w"), ("stdin", "r")):
+            if getattr(sys, _name, None) is None:
+                setattr(sys, _name, open(os.devnull, _mode, encoding="utf-8"))
     _set_app_id()
     _init_theme()
 
@@ -165,6 +185,15 @@ def main():
         _install_qt_capture()
     app = QApplication(sys.argv)
     _mark("QApplication created (PySide6 imported)")
+    if "--setup" in sys.argv or "--setup-force" in sys.argv:          # started by the installer's Finish button: first-run setup
+        try:
+            from setup_wizard import run_setup_wizard
+            if not run_setup_wizard(app, force="--setup-force" in sys.argv):
+                sys.exit(0)                                           # the wizard was closed: don't open the app
+        except SystemExit:
+            raise
+        except Exception:                                             # a problem in the wizard must never stop the app from starting
+            pass
     splash = _make_splash(app)
     splash.show()
     _mark("splash.show() returned")
