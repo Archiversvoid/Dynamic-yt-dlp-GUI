@@ -1,0 +1,54 @@
+# --- Python Bytecode & Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+ENV/
+env/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+.installed.cfg
+
+
+# --- PyInstaller Build Artifacts ---
+/build/
+/dist/
+/output/
+
+
+# --- Local Binaries & External Tools ---
+bin/
+ffmpeg.exe
+ffprobe.exe
+Dynamic.exe
+
+# --- Local Caches, Logs & Downloads ---
+/cache/
+/logs/
+/downloads/
+/_old_refactor_backup/
+downloads.json
+file tree.txt
+new.py
+remove_stale_files.py
+settings.json
+vscode_progressbar.py
+
+# --- Sensitive Data & Cookies ---
+*cookies*
+*.cookie
+
+# --- OS Specific ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.swp
+*.swo
+.DS_Store
