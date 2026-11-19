@@ -1,14 +1,29 @@
 name: Build release
 
-# Push a tag like v1.2.3 and this builds the installer and the in-app update package, then attaches both to a DRAFT release.
-# Nothing is visible to the app until you press "Publish release" on GitHub.
+# Two ways to make a release - both end with the installer (and, from the second version on, the in-app update zip)
+# attached to a GitHub release. Nothing reaches the app until the release is PUBLISHED.
+#
+#  A) From here: Actions -> "Build release" -> "Run workflow", type the version (e.g. 1.1.2).
+#     It builds and leaves a DRAFT release "v1.1.2" with the files attached. Open it under Releases, write the notes
+#     (the tag is filled in; publishing creates it) and press "Publish release".
+#     Leave the version empty for a test build (the files are kept on the run, no release is made).
+#
+#  B) From Releases: "Draft a new release" -> choose a tag -> type  v1.1.2  ("Create new tag") -> write the notes -> Publish.
+#     Creating that tag starts this workflow by itself: it builds from the tag and attaches the files to YOUR release
+#     (title and notes are left alone). Tick "Set as a pre-release" first if you want apps to ignore it until the files are
+#     there, then untick it when the run is green.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
-  workflow_dispatch:                 # Actions tab -> Run workflow: a test build, kept as a downloadable artifact (no release)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, three numbers (e.g. 1.1.2). Leave empty for a test build."
+        required: false
+        default: ""
 
 permissions:
-  contents: write                    # needed to create the release
+  contents: write                    # needed to create the release and attach files
 
 jobs:
   build:
@@ -20,38 +35,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Work out the version from the tag
+      - name: Work out the version and what to do
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            SOURCE=tag;    V="${GITHUB_REF_NAME#v}"
           else
-            echo "VERSION=" >> "$GITHUB_ENV"        # manual test run: keep the version written in src/core/app_info.py
+            SOURCE=manual; V="${INPUT_VERSION#v}"
           fi
+          BUILD=yes; NEW_RELEASE=true
+          if [ -n "$V" ]; then
+            if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::The version must be three numbers like 1.1.2 (got '$V')"; exit 1
+            fi
+            if [ "$SOURCE" = manual ]; then
+              if [ -n "$(git ls-remote --tags origin "refs/tags/v$V")" ]; then
+                echo "::error::A release v$V already exists - pick a higher version"; exit 1
+              fi
+            elif gh release view "v$V" > /dev/null 2>&1; then
+              NEW_RELEASE=false                      # you created this release yourself: only attach the files to it
+              if gh release view "v$V" --json assets --jq '.assets[].name' | grep -qx "Dynamic-Setup-$V.exe"; then
+                BUILD=no; echo "::notice::v$V already has its files - nothing to build"
+              fi
+            fi
+          fi
+          { echo "VERSION=$V"; echo "BUILD=$BUILD"; echo "NEW_RELEASE=$NEW_RELEASE"; } >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
+        if: ${{ env.BUILD != 'no' }}
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install the Python packages
+        if: ${{ env.BUILD != 'no' }}
         run: python -m pip install -r requirements.txt
 
       - name: Install the current Inno Setup
+        if: ${{ env.BUILD != 'no' }}
         shell: pwsh
         run: choco upgrade innosetup -y --no-progress
 
-      - name: Build (app + update zip + installer)
+      - name: Build (app + installer + update zip)
+        if: ${{ env.BUILD != 'no' }}
         shell: bash
         run: |
-          if [ -n "$VERSION" ]; then python build.py --version "$VERSION"; else python build.py; fi
+          if [ -n "$VERSION" ]; then python build.py --ci --version "$VERSION"; else python build.py --ci; fi
 
       - name: List what was built
+        if: ${{ env.BUILD != 'no' }}
         shell: pwsh
         run: Get-ChildItem dist, Output | Where-Object { -not $_.PSIsContainer } | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Keep the files (test runs only)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - name: Keep the files (test build)
+        if: ${{ env.BUILD != 'no' && env.VERSION == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: Dynamic-test-build
@@ -61,14 +101,16 @@ jobs:
             Output/*.sha256.txt
             dist/*.sha256.txt
 
-      - name: Attach to a draft release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      - name: Attach to the release
+        if: ${{ env.BUILD != 'no' && env.VERSION != '' }}
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
-          name: Dynamic ${{ env.VERSION }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          draft: ${{ env.NEW_RELEASE == 'true' && 'true' || '' }}
+          name: ${{ env.NEW_RELEASE == 'true' && format('Dynamic {0}', env.VERSION) || '' }}
+          generate_release_notes: ${{ env.NEW_RELEASE == 'true' }}
+          fail_on_unmatched_files: false        # the first version (1.1.0) has no update zip; build.py --ci checks the rest
           files: |
             Output/*.exe
             dist/*-update.zip
