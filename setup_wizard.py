@@ -25,9 +25,9 @@ from src.ui.components.controls import ModernScrollArea
 from src.ui.styles import BG_DARK, CARD_BG, CARD_INNER_BG, TEAL_ACCENT, TEXT_MAIN, TEXT_MUTED
 
 FEATURES = (
-    ("Precision clip trimming", "Cut exact segments from online videos without downloading hours of footage."),
     ("Format and quality control", "Pick the resolution, audio bitrate and container you want - nothing extra."),
-    ("Stays up to date", "Dynamic checks for new releases and updates itself with one click."),
+    ("Precision clip trimming", "Cut exact segments from online videos without downloading hours of footage."),
+    ("Open source and free", "Dynamic is a free open source software licensed under GPL-3.0."),
 )
 TOOLS = (("yt-dlp", "Finds and downloads the videos"), ("ffmpeg", "Merges, trims and converts them"))
 FALLBACK_TERMS = ("**Terms of Use**\n\nDynamic is provided as is, without warranty. You are responsible for following the terms "
@@ -187,7 +187,7 @@ class SetupWizard(QDialog):
         logo.setStyleSheet("background: transparent;")
         lay.addWidget(logo)
         lay.addWidget(_text("Welcome to Dynamic", 30, bold=True))
-        lay.addWidget(_text("Lightweight video downloading and precision trimming - version %s." % APP_VERSION, 14, muted=True))
+        lay.addWidget(_text("A simple cutting-edge yt-dlp GUI - version %s." % APP_VERSION, 14, muted=True))
         lay.addSpacing(6)
         for title, body in FEATURES:
             card = _card()
