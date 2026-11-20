@@ -1,17 +1,4 @@
 name: Build release
-
-# Two ways to make a release - both end with the installer (and, from the second version on, the in-app update zip)
-# attached to a GitHub release. Nothing reaches the app until the release is PUBLISHED.
-#
-#  A) From here: Actions -> "Build release" -> "Run workflow", type the version (e.g. 1.1.2).
-#     It builds and leaves a DRAFT release "v1.1.2" with the files attached. Open it under Releases, write the notes
-#     (the tag is filled in; publishing creates it) and press "Publish release".
-#     Leave the version empty for a test build (the files are kept on the run, no release is made).
-#
-#  B) From Releases: "Draft a new release" -> choose a tag -> type  v1.1.2  ("Create new tag") -> write the notes -> Publish.
-#     Creating that tag starts this workflow by itself: it builds from the tag and attaches the files to YOUR release
-#     (title and notes are left alone). Tick "Set as a pre-release" first if you want apps to ignore it until the files are
-#     there, then untick it when the run is green.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
