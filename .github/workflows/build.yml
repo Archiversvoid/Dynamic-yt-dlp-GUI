@@ -1,7 +1,9 @@
 name: Build release
 on:
   push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       version:
@@ -28,28 +30,34 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            SOURCE=tag;    V="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            SOURCE=tag;    TAG="$GITHUB_REF_NAME"; V="${TAG#v}"
           else
-            SOURCE=manual; V="${INPUT_VERSION#v}"
+            SOURCE=manual; V="${INPUT_VERSION#v}"; TAG="v$V"
           fi
+          if [ -z "$V" ]; then TAG=""; fi
           BUILD=yes; NEW_RELEASE=true
           if [ -n "$V" ]; then
             if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::The version must be three numbers like 1.1.2 (got '$V')"; exit 1
             fi
             if [ "$SOURCE" = manual ]; then
-              if [ -n "$(git ls-remote --tags origin "refs/tags/v$V")" ]; then
-                echo "::error::A release v$V already exists - pick a higher version"; exit 1
+              if [ -n "$(git ls-remote --tags origin "refs/tags/v$V" "refs/tags/$V")" ]; then
+                echo "::error::A release $V already exists (tag v$V or $V) - pick a higher version"; exit 1
               fi
-            elif gh release view "v$V" > /dev/null 2>&1; then
+            elif gh release view "$TAG" > /dev/null 2>&1; then
               NEW_RELEASE=false                      # you created this release yourself: only attach the files to it
-              if gh release view "v$V" --json assets --jq '.assets[].name' | grep -qx "Dynamic-Setup-$V.exe"; then
-                BUILD=no; echo "::notice::v$V already has its files - nothing to build"
+              if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "Dynamic-Setup-$V.exe"; then
+                BUILD=no; echo "::notice::$TAG already has its files - nothing to build"
               fi
             fi
           fi
-          { echo "VERSION=$V"; echo "BUILD=$BUILD"; echo "NEW_RELEASE=$NEW_RELEASE"; } >> "$GITHUB_ENV"
+          { echo "VERSION=$V"; echo "TAG=$TAG"; echo "BUILD=$BUILD"; echo "NEW_RELEASE=$NEW_RELEASE"; } >> "$GITHUB_ENV"
+          {
+            echo "### Dynamic build"
+            if [ -n "$V" ]; then echo "- Version being built: **$V** (from the $SOURCE; tag \`$TAG\`)"; else echo "- Test build (no version typed): uses the version written in src/core/app_info.py"; fi
+            if [ "$BUILD" = no ]; then echo "- Skipped: the release already has its files"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-python@v5
         if: ${{ env.BUILD != 'no' }}
@@ -92,7 +100,7 @@ jobs:
         if: ${{ env.BUILD != 'no' && env.VERSION != '' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}
+          tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
           draft: ${{ env.NEW_RELEASE == 'true' && 'true' || '' }}
           name: ${{ env.NEW_RELEASE == 'true' && format('Dynamic {0}', env.VERSION) || '' }}
