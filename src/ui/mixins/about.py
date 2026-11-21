@@ -60,7 +60,7 @@ class AboutMixin:
             logo.setPixmap(pm); logo.setFixedSize(148, 148)
         title = QLabel("Dynamic")
         _ss(title, f"color: {TEXT_MAIN}; font-size: 44px; background: transparent;")
-        tag = QLabel("A simple cutting-edge yt-dlp GUI")
+        tag = QLabel("A simple, cutting-edge yt-dlp GUI")
         _ss(tag, f"color: {TEXT_MUTED}; font-size: 16px; background: transparent;")
         ver = QLabel("version " + APP_VERSION)
         _ss(ver, f"color: {TEXT_MAIN}; font-size: 15px; background-color: #1A1A1A; border: 1px solid #2A2A2A; border-radius: 16px; padding: 6px 22px;")
