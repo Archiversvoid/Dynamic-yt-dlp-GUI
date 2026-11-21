@@ -59,12 +59,6 @@ UninstallDisplayName={#MyAppName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-; Pictures on the installer pages, made from icons\icon 2.ico by build.py. Without them the installer still compiles
-; (with Inno's default pictures).
-#if FileExists(SourcePath + "installer_art\wizard_large.bmp")
-WizardImageFile=installer_art\wizard_large.bmp
-WizardSmallImageFile=installer_art\wizard_small.bmp
-#endif
 CloseApplications=yes
 RestartApplications=no
 VersionInfoVersion={#MyAppVersion}.0
