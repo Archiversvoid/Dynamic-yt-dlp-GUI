@@ -46,7 +46,7 @@
 
 - **Video or audio** – choose a resolution for video, or switch to audio and pick an MP3 bitrate. An estimated file size is shown before you download.
 - **Precision clip trimming (TrimLoad)** – watch a preview, pick the exact start and end, and download only that segment instead of the whole video.
-- **Downloads tab** – live progress, speed, ETA and thumbnails for every download. If something fails, Dynamic tells you why in plain words.
+- **Downloads tab** – live progress, speed, ETA and thumbnails for every download. If something fails, you can see the reason why in the error log.
 - **Dark and light themes** – follows Windows by default, or choose one in Settings.
 - **Stays up to date** – one place (Settings > Update) keeps yt-dlp, ffmpeg and Dynamic itself current. Updates replace only the files that changed, and yt-dlp/ffmpeg can update on a schedule.
 - **Lives in the tray** – closing the window keeps Dynamic running quietly in the system tray; opening it again just brings it back.
@@ -75,11 +75,95 @@ Use **Windows Settings > Apps > Installed apps > Dynamic > Uninstall**. The unin
 
 ## Quick start
 
-1. **Paste a link** on the Home page and press Enter. Dynamic contacts the site and reads the available streams.
-2. In **TrimLoad**, choose **Video** or **Audio**, pick a quality, and (if you only want a clip) drag the handles or type the **Start** and **End** times.
-3. Press **Download**, then follow it in the **Downloads** tab.
+**To save a whole video or song (Home):**
+
+1. On the **Home** page, paste a link and press Enter. Dynamic reads the site and shows a card for the video.
+2. Choose **Video** or **Audio**, pick a quality or bitrate from the list, and press **Download**.
+3. Follow it in the **Downloads** tab.
+
+**To save just a clip (TrimLoad):**
+
+1. Open the **TrimLoad** tab (the scissors icon), paste a link into its own box and press Enter.
+2. Watch the preview, then drag the handles or type the **Start** and **End** times.
+3. Choose **Video** or **Audio**, pick a quality, and press **Download**.
 
 If yt-dlp or ffmpeg is missing, a notification on the Home and TrimLoad pages lets you download it with one click, or point Dynamic at a copy you already have (**From disk...**).
+
+## How Home works
+
+Home is Dynamic's quick downloader: paste a link, pick what you want, press **Download**. It always saves the **whole** video or audio track, so it needs no preview and is the most dependable way to get something. (For a clip, use [TrimLoad](#how-trimload-works).)
+
+### What you see
+
+Paste a link and press Enter. A progress screen shows Dynamic reading the site, then a card appears with the thumbnail, title, channel, site and length, a **Video / Audio** switch, one list of qualities, and a **Download** button. Pressing it hands the job to the **Downloads** tab.
+
+### The quality and bitrate lists are not hard-coded
+
+Many downloaders show the same fixed list (1080p, 720p, 320 kbps...) whatever you paste. Dynamic builds its lists from what the site actually offers for **that exact link**:
+
+- **Video** – one entry per resolution the site has, highest first. A frame rate is added above 30 fps (for example `1080p 60fps`) and an estimated file size is shown next to each entry. A video that only exists in 480p shows 480p, never a 4K option that wouldn't work. Storyboard thumbnails are ignored. If a site doesn't report a resolution you get *Default Video*, and if it reports no usable streams at all there is a single *Best quality* entry.
+- **Audio** – one entry per audio bitrate the site offers, highest first (for example `MP3 160kbps`), with an estimated size. Unknown bitrates show as *Best Audio*. Only when a site reports no audio streams at all does Dynamic fall back to a standard ladder (320, 256, 192, 128, 96 and 64 kbps).
+- **Audio-only sites** such as SoundCloud skip the video list entirely.
+
+### What your choice does
+
+- A **video quality** tells yt-dlp to fetch exactly that stream plus the best audio, and merges them into one `.mp4`.
+- An **audio bitrate** converts the audio to MP3 at the closest standard MP3 bitrate (a 130 kbps source is encoded at 128).
+- **Live and scheduled streams** are turned away with a message.
+
+### Home or TrimLoad?
+
+| | Home | TrimLoad |
+| --- | --- | --- |
+| Best for | A whole video or song | Just a part of a video |
+| Needs a preview | No | Yes |
+| Most dependable | Yes | Depends on the site (see the [notes](#trimload-notes)) |
+
+## How TrimLoad works
+
+TrimLoad is a simple video player with live preview capabilities for audio and video sites, but a fair bit happens underneath. Here is how it works behind the scenes.
+
+
+
+### 1. Reading the streams
+
+When you paste a link into TrimLoad's own box (*Enter link to trim...*) and press Enter, Dynamic asks **yt-dlp** about the video: title, uploader, length, thumbnail and, most importantly, the list of **streams** the site offers. **Nothing is downloaded at this point.** A site usually offers many streams: several resolutions, video-only and audio-only versions, and sometimes a combined one. Live and scheduled streams are turned away here with a message, because they have no fixed length to trim.
+
+The progress screen you see (*Start > Streams > Process > Preview > Done*) is exactly these steps.
+
+### 2. Picking a stream for the preview
+
+A player can open only **one** address, but many sites keep video and audio apart. So Dynamic tries to choose the single stream that is most likely to play directly, preferring formats that play reliably (usually H.264 MP4), and hands it to the player.
+
+That is why the preview can sometimes be silent (only a video stream was playable) or show **Preview not available** (nothing playable was offered). It is also why the preview is not always the same quality as the file you download.
+
+### 3. The preview player
+
+The preview streams **straight from the website**, so nothing is saved to your disk while you watch. In the installed app it uses Qt's multimedia player with Windows' built-in media engine, which keeps Dynamic small; the trade-off is the codec limits described in the [TrimLoad notes](#trimload-notes).
+
+The two handles on the timeline and the **Start** / **End** boxes are kept in sync: drag a handle and the box updates, type a time and the handle moves. Some sites' stream links expire after a few hours, so if a video has been open for a long time and the preview stops, paste the link again.
+
+### 4. Video, audio and the size estimate
+
+The **Video / Audio** switch changes what the quality box offers: resolutions for video, **MP3 bitrates** for audio. Dynamic remembers your choice for each mode.
+
+The **estimated size** is worked out from the quality you picked and the length of your selection, which is why it changes as you drag the handles. It is only an estimate; the final size depends on how the site encoded the video.
+
+### 5. What happens when you press Download
+
+Dynamic does **not** download the whole video and cut it afterwards. Instead:
+
+1. **yt-dlp downloads only your section** (`--download-sections`), in parallel pieces where the site allows it.
+2. **ffmpeg makes the cut frame-accurate.** Video can only be cut cleanly at certain "keyframes", so around each cut point a few seconds are re-encoded and the rest is copied untouched (`--force-keyframes-at-cuts`). You get precise cuts without re-encoding the whole clip.
+3. **Video:** the best video and audio for your chosen quality are merged into one `.mp4`. **Audio:** the best audio is converted to MP3 at your chosen bitrate, with the cover art and tags embedded.
+4. In the installed app the download is done in a temporary working folder inside your download folder and moved into place when it finishes, under a free name (`Title.mp4`, then `Title (1).mp4`, and so on), so nothing is ever overwritten.
+
+This is also why **ffmpeg is required** for trimming, and why a download can succeed even when the preview can't.
+
+### Under the hood
+
+- **Loaded on demand.** The preview engine is heavy, so TrimLoad is built the first time you open it (you may briefly see *Loading TrimLoad…*). Dynamic warms the needed files up in the background right after launch, so it is usually instant.
+- **One engine for everything.** The Home page, TrimLoad and the Downloads tab all use the same yt-dlp and ffmpeg that **Settings > Update** keeps current. The installed app runs `yt-dlp.exe` from its `bin` folder.
 
 ## TrimLoad notes
 
@@ -92,6 +176,8 @@ If yt-dlp or ffmpeg is missing, a notification on the Home and TrimLoad pages le
 - **Live and scheduled streams are not supported** in TrimLoad.
 - **The estimated size is only an estimate.** The real file can differ a little.
 - Trimming needs **ffmpeg**.
+
+If a site won't preview, you can still save the whole video from the **Home** page, which needs no preview.
 
 If a site behaves badly, please [open an issue](https://github.com/Archiversvoid/Dynamic-yt-dlp-GUI/issues) with the link (if it's public) and what you saw.
 
@@ -132,7 +218,6 @@ You only need this if you want to run or change the code. Normal users should us
 
 - **Windows 10 or 11**
 - **[Python 3.12](https://www.python.org/downloads/)** (the version releases are built with)
-- **[Git](https://git-scm.com/downloads)** – only to download the code (the "clone" step below)
 - **[Inno Setup 6.3+](https://jrsoftware.org/isinfo.php)** – only if you want to build the installer
 
 ### Run it
